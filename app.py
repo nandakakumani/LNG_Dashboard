@@ -681,47 +681,57 @@ def style_table(
 
     Features:
       - Centre all headers and cells
-      - Display negative numbers in red
-      - Use bold dark subtotal rows
-      - Use a stronger, clearer header row
+      - Display all negative numbers in red
+      - Display negative subtotal numbers in red
+      - Keep positive subtotal numbers white
+      - Use a stronger header row
     """
 
-    def style_rows(row):
+    def apply_row_style(row):
         styles = []
 
         for column in display_df.columns:
-            style = (
+            # Default alignment for every cell.
+            cell_style = (
                 "text-align: center; "
                 "vertical-align: middle;"
             )
 
-            if row.name in subtotal_rows:
-                style += (
-                    "background-color: #1f2937; "
-                    "color: white; "
-                    "font-weight: bold; "
-                    "border-top: 2px solid #64748b; "
-                    "border-bottom: 1px solid #64748b;"
-                )
+            is_subtotal = row.name in subtotal_rows
 
-            elif (
+            is_negative_number = (
                 column in value_columns
                 and pd.notna(
                     numeric_df.loc[row.name, column]
                 )
                 and numeric_df.loc[row.name, column] < 0
-            ):
-                style += (
+            )
+
+            if is_subtotal:
+                cell_style += (
+                    "background-color: #1f2937; "
+                    "font-weight: bold; "
+                    "border-top: 2px solid #64748b; "
+                    "border-bottom: 1px solid #64748b;"
+                )
+
+                if is_negative_number:
+                    cell_style += "color: #ff4b4b;"
+                else:
+                    cell_style += "color: white;"
+
+            elif is_negative_number:
+                cell_style += (
                     "color: #dc2626; "
                     "font-weight: 600;"
                 )
 
-            styles.append(style)
+            styles.append(cell_style)
 
         return styles
 
     styled = display_df.style.apply(
-        style_rows,
+        apply_row_style,
         axis=1,
     )
 
@@ -763,7 +773,6 @@ def style_table(
     )
 
     return styled
-
 
 # ============================================================
 # LOAD WORKBOOK
