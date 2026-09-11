@@ -38,16 +38,16 @@ st.markdown(
 # HEADER AND FILE UPLOAD
 # ============================================================
 
-st.title("LNG Contract Exposure Dashboard")
+st.title("SEFE LNG Exposure Dashboard")
 
 uploaded_file = st.file_uploader(
-    "Upload COB Dashboard",
+    "Upload Master Dashboard",
     type=["xlsx", "xlsm"],
 )
 
 if uploaded_file is None:
     st.info(
-        "Upload the COB workbook to generate the exposure table."
+        "Upload the Master Dashboard to generate the exposure table."
     )
     st.stop()
 
@@ -713,7 +713,7 @@ try:
 
 except Exception as error:
     st.error(
-        f"Failed to read workbook: {error}"
+        f"Failed to read DB: {error}"
     )
     st.stop()
 
@@ -776,7 +776,7 @@ if not reference_dictionary:
 # ============================================================
 
 with st.spinner(
-    "Cleaning data and matching cargo references..."
+    "Cleaning and matching cargo references..."
 ):
     data = prepare_data(
         trades,
