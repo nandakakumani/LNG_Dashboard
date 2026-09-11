@@ -88,6 +88,51 @@ def clean_text(value):
     )
 
 
+def match_contracts(
+    reference_series,
+    reference_dictionary,
+):
+    """
+    Match cargo references using vectorised dictionary mapping.
+
+    Matching order:
+      1. Exact cargo reference
+      2. Remove one final numeric suffix
+      3. Remove two final numeric suffixes
+      4. Remove three final numeric suffixes
+
+    Example:
+
+      YAMAL CY23-09-1
+
+    can match:
+
+      YAMAL CY23-09
+    """
+    reference_keys = clean_text_series(
+        reference_series
+    )
+
+    matched = reference_keys.map(
+        reference_dictionary
+    )
+
+    candidate = reference_keys.copy()
+
+    for _ in range(3):
+        candidate = candidate.str.replace(
+            r"-\d+$",
+            "",
+            regex=True,
+        )
+
+        matched = matched.fillna(
+            candidate.map(reference_dictionary)
+        )
+
+    return matched
+
+
 @st.cache_data(show_spinner=False)
 def read_workbook(file_bytes):
     """
@@ -276,51 +321,6 @@ def prepare_data(trades, reference_dictionary):
     return data
 
 
-def match_contracts(
-    reference_series,
-    reference_dictionary,
-):
-    """
-    Match cargo references using vectorised dictionary mapping.
-
-    Matching order:
-      1. Exact cargo reference
-      2. Remove one final numeric suffix
-      3. Remove two final numeric suffixes
-      4. Remove three final numeric suffixes
-
-    Example:
-
-      YAMAL CY23-09-1
-
-    can match:
-
-      YAMAL CY23-09
-    """
-    reference_keys = clean_text_series(
-        reference_series
-    )
-
-    matched = reference_keys.map(
-        reference_dictionary
-    )
-
-    candidate = reference_keys.copy()
-
-    for _ in range(3):
-        candidate = candidate.str.replace(
-            r"-\d+$",
-            "",
-            regex=True,
-        )
-
-        matched = matched.fillna(
-            candidate.map(reference_dictionary)
-        )
-
-    return matched
-
-
 def classify_products(
     product_series,
     exposure_type,
@@ -373,7 +373,7 @@ def classify_products(
             hh_mask
         ] = "HH"
 
-        # Oil
+        # Oil products
         oil_mask = product_keys.str.contains(
             r"BFL|JCC|DATED BRENT|BRENT|DUBAI",
             regex=True,
@@ -384,7 +384,7 @@ def classify_products(
             oil_mask
         ] = "Oil"
 
-        # European gas
+        # European gas products
         eu_gas_mask = product_keys.str.contains(
             r"TTF|THE|PEG|NBP|ZTP",
             regex=True,
@@ -395,7 +395,7 @@ def classify_products(
             eu_gas_mask
         ] = "EU Gas"
 
-        # JKM
+        # JKM products
         jkm_mask = product_keys.str.contains(
             "JKM",
             regex=False,
@@ -526,7 +526,7 @@ def build_exposure_table(
             detail["SECTION"] == section_name
         ].copy()
 
-        # Do not display an empty section.
+        # Do not display empty sections.
         if section_data.empty:
             continue
 
@@ -817,15 +817,13 @@ if not available_contracts:
     st.stop()
 
 
-# Create a context value so selections reset when type/year changes.
+# Reset contract choices when the file, type or year changes.
 contract_context = (
-    f"{selected_type}_{selected_year}_"
-    f"{uploaded_file.name}"
+    f"{selected_type}_{selected_year}_{uploaded_file.name}"
 )
 
 if (
-    "last_contract_context"
-    not in st.session_state
+    "last_contract_context" not in st.session_state
     or st.session_state["last_contract_context"]
     != contract_context
 ):
@@ -838,7 +836,7 @@ if (
     )
 
 
-# Remove any contracts that are no longer available.
+# Remove selections that are not available in the current context.
 st.session_state["contract_selection"] = [
     contract
     for contract in st.session_state.get(
@@ -887,7 +885,6 @@ selected_contracts = st.multiselect(
         "Add it back to switch it on."
     ),
 )
-
 
 if not selected_contracts:
     st.warning(
