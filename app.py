@@ -8,8 +8,8 @@ from io import BytesIO
 # ============================================================
 
 st.set_page_config(
-    page_title="LNG Contract Exposure Dashboard",
-    page_icon="🚢",
+    page_title="SEFE LNG Exposure Dashboard",
+    page_icon="",
     layout="wide",
 )
 
