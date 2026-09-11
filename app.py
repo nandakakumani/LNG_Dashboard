@@ -1452,7 +1452,7 @@ with pd.ExcelWriter(
     number_format = workbook.add_format(
         {
             "num_format": (
-                '#,##0.00;#,##0.00;-'
+                '#,##0.00;[Red](#,##0.00)'
             ),
         }
     )
@@ -1471,7 +1471,7 @@ with pd.ExcelWriter(
             "font_color": "white",
             "bg_color": "#1F2937",
             "num_format": (
-                '#,##0.00;#,##0.00;-'
+                '#,##0.00;[Red](#,##0.00)'
             ),
         }
     )
@@ -1601,7 +1601,7 @@ download_year = (
 )
 
 st.download_button(
-    label="📥 Download Exposure Table",
+    label="Download Exposure Table",
     data=output.getvalue(),
     file_name=(
         f"{selected_type.title()}_Contract_Exposure_"
