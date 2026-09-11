@@ -25,13 +25,6 @@ st.markdown(
         padding-top: 1rem;
     }
 
-    [data-testid="metric-container"] {
-        background-color: #111827;
-        border: 1px solid #293241;
-        padding: 15px;
-        border-radius: 12px;
-    }
-
     h1, h2, h3 {
         color: white;
     }
@@ -206,6 +199,7 @@ def match_contracts(
 
     Example:
         YAMAL CY23-09-1
+
     can match:
         YAMAL CY23-09
     """
@@ -1135,7 +1129,7 @@ selected_products = st.multiselect(
     placeholder="Select products to display",
     help=(
         "EUGAS products are consolidated to "
-        "TTF, THE, PEG, NBP or ZTP."
+        "TTF, THE, PEG, NBP, or ZTP."
     ),
 )
 
@@ -1241,35 +1235,6 @@ if matched.empty:
         "for the selected filters."
     )
     st.stop()
-
-
-# ============================================================
-# KPIs
-# ============================================================
-
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-
-kpi1.metric(
-    "Selected Contracts",
-    f"{matched['MATCHED CONTRACT'].nunique():,}",
-)
-
-kpi2.metric(
-    "Cargo References",
-    f"{matched['CARGO#/TRADEID'].nunique():,}",
-)
-
-kpi3.metric(
-    "Selected Products",
-    f"{matched['DISPLAY PRODUCT'].nunique():,}",
-)
-
-kpi4.metric(
-    "Net Exposure",
-    f"{matched['VOLUME_TBTU'].sum():,.2f} TBtu",
-)
-
-st.divider()
 
 
 # ============================================================
