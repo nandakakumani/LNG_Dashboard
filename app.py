@@ -1,544 +1,817 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 from io import BytesIO
 
 st.set_page_config(
-    page_title="LNG Cargo Exposure Dashboard",
+    page_title="LNG Contract Exposure Dashboard",
     page_icon="🚢",
-    layout="wide"
+    layout="wide",
 )
 
-# =========================
-# STYLING
-# =========================
+# ============================================================
+# STYLE
+# ============================================================
 
-st.markdown("""
-<style>
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1rem;
+    }
 
-.block-container {
-    padding-top: 1rem;
-}
+    [data-testid="metric-container"] {
+        background-color: #111827;
+        border: 1px solid #293241;
+        padding: 15px;
+        border-radius: 12px;
+    }
 
-[data-testid="metric-container"] {
-    background-color: #111827;
-    border: 1px solid #293241;
-    padding: 15px;
-    border-radius: 12px;
-}
+    h1, h2, h3 {
+        color: white;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-h1,h2,h3 {
-    color: white;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# =========================
-# HEADER
-# =========================
-
-st.title("🚢 LNG Cargo Exposure Dashboard")
+st.title("LNG Contract Exposure Dashboard")
 
 uploaded_file = st.file_uploader(
     "Upload COB Dashboard",
-    type=["xlsx", "xlsm"]
+    type=["xlsx", "xlsm"],
 )
 
-if uploaded_file:
+if uploaded_file is None:
+    st.info("Upload the COB workbook to generate the exposure table.")
+    st.stop()
 
-    # =========================
-    # READ FILE
-    # =========================
 
-    try:
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
-        df = pd.read_excel(
-            uploaded_file,
-            sheet_name="TRADESNEW",
-            header=6,
-            engine="openpyxl"
-        )
+def clean_text(value):
+    """Standardise text used for matching."""
+    if pd.isna(value):
+        return ""
 
-    except Exception as e:
+    return " ".join(str(value).strip().upper().split())
 
-        st.error(f"Failed to load workbook: {e}")
-        st.stop()
 
-    df.columns = [str(c).strip() for c in df.columns]
-
-    required_cols = [
-        "FIRM",
-        "TYPE",
-        "CARGO#/TRADEID",
-        "VOLUME",
-        "EXPOSURE DATE",
-        "IFRS YEAR"
-    ]
-
-    missing_cols = [
-        c for c in required_cols
-        if c not in df.columns
-    ]
-
-    if missing_cols:
-
-        st.error(
-            f"Missing columns: {missing_cols}"
-        )
-
-        st.write("Columns found:")
-        st.write(df.columns.tolist())
-
-        st.stop()
-
-    # =========================
-    # IFRS YEAR
-    # =========================
-
-    years = sorted(
-        pd.to_numeric(
-            df["IFRS YEAR"],
-            errors="coerce"
-        )
-        .dropna()
-        .astype(int)
-        .unique()
+def read_workbook(file):
+    """Read the required worksheets."""
+    trades = pd.read_excel(
+        file,
+        sheet_name="TRADESNEW",
+        header=6,
+        engine="openpyxl",
     )
 
-    selected_year = st.selectbox(
-        "IFRS Year",
-        years,
-        index=len(years)-1
+    file.seek(0)
+
+    cargo_refs = pd.read_excel(
+        file,
+        sheet_name="All cargo refs",
+        header=None,
+        engine="openpyxl",
     )
 
-    # =========================
-    # DATA CLEANING
-    # =========================
+    return trades, cargo_refs
 
-    data = df.copy()
 
-    data["VOLUME"] = pd.to_numeric(
-        data["VOLUME"],
-        errors="coerce"
-    )
+def build_reference_mapping(cargo_refs):
+    """
+    Build a lookup table where each cargo reference is linked
+    to the contract shown in column B of 'All cargo refs'.
 
-    data["IFRS YEAR"] = pd.to_numeric(
-        data["IFRS YEAR"],
-        errors="coerce"
-    )
+    Column B = contract
+    Columns C onward = cargo references
+    """
+    mapping_rows = []
 
-    data["EXPOSURE DATE"] = pd.to_datetime(
-        data["EXPOSURE DATE"],
-        errors="coerce"
-    )
+    for _, row in cargo_refs.iterrows():
+        contract = row.iloc[1] if len(row) > 1 else None
 
-    # =========================
-    # FILTERS
-    # =========================
-
-    data = data[
-        (
-                data["FIRM"]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                == "FIRM"
-        )
-        &
-        (
-                data["TYPE"]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                == "CARGO"
-        )
-        &
-        (data["IFRS YEAR"] == selected_year)
-        &
-        (
-                data["CARGO#/TRADEID"]
-                .astype(str)
-                .str.strip()
-                != ""
-        )
-        &
-        (data["VOLUME"] != 0)
-    ]
-
-    if data.empty:
-
-        st.warning("No Cargo exposures found.")
-
-        st.stop()
-
-    # =========================
-    # MONTH
-    # =========================
-
-    data["MONTH"] = (
-        data["EXPOSURE DATE"]
-        .dt.to_period("M")
-        .dt.to_timestamp()
-    )
-
-    min_month = (
-        data["MONTH"]
-        .min()
-        .replace(day=1)
-    )
-
-    max_month = (
-        data["MONTH"]
-        .max()
-        .replace(day=1)
-    )
-
-    months = pd.date_range(
-        start=min_month,
-        end=max_month,
-        freq="MS"
-    )
-
-    # =========================
-    # PIVOT
-    # =========================
-
-    pivot = pd.pivot_table(
-        data,
-        index="CARGO#/TRADEID",
-        columns="MONTH",
-        values="VOLUME",
-        aggfunc="sum"
-    )
-
-    pivot = pivot.reindex(
-        columns=months
-    )
-
-    pivot = pivot / 1_000_000
-
-    month_labels = [
-        m.strftime("%b-%y")
-        for m in months
-    ]
-
-    pivot.columns = month_labels
-
-    # =========================
-    # SEARCH
-    # =========================
-
-    search = st.text_input(
-        "🔍 Search Cargo Reference"
-    )
-
-    if search:
-
-        pivot = pivot[
-            pivot.index.astype(str)
-            .str.contains(
-                search,
-                case=False,
-                na=False
-            )
-        ]
-
-    # =========================
-    # KPIs
-    # =========================
-
-    kpi_data = data.copy()
-
-    cargo_exposure = (
-            kpi_data.groupby("CARGO#/TRADEID")["VOLUME"]
-            .sum()
-            / 1_000_000
-    )
-
-    cargo_exposure = (
-            data.groupby(
-                "CARGO#/TRADEID"
-            )["VOLUME"]
-            .sum()
-            / 1_000_000
-    )
-
-    cargo_count = len(cargo_exposure)
-
-    long_cargo_count = int(
-        (cargo_exposure > 0).sum()
-    )
-
-    short_cargo_count = int(
-        (cargo_exposure < 0).sum()
-    )
-
-    long_volume = (
-            data.loc[
-                data["VOLUME"] > 0,
-                "VOLUME"
-            ].sum()
-            / 1_000_000
-    )
-
-    short_volume = (
-            data.loc[
-                data["VOLUME"] < 0,
-                "VOLUME"
-            ].sum()
-            / 1_000_000
-    )
-
-    net_position = (
-            data["VOLUME"].sum()
-            / 1_000_000
-    )
-
-    row1 = st.columns(3)
-
-    row1[0].metric(
-        "Cargo References",
-        f"{cargo_count:,}"
-    )
-
-    row1[1].metric(
-        "Long Cargoes",
-        int(long_cargo_count)
-    )
-
-    row1[2].metric(
-        "Short Cargoes",
-        int(short_cargo_count)
-    )
-
-    row2 = st.columns(3)
-
-    row2[0].metric(
-        "Net Exposure",
-        f"{net_position:,.2f} TBtu"
-    )
-
-    row2[1].metric(
-        "Long Volume",
-        f"{long_volume:,.2f} TBtu"
-    )
-
-    row2[2].metric(
-        "Short Volume",
-        f"{short_volume:,.2f} TBtu"
-    )
-
-    st.divider()
-
-    # =========================
-    # TABLE
-    # =========================
-
-    st.subheader("Cargo Exposure Matrix")
-
-    display_df = pivot.copy()
-
-    for col in display_df.columns:
-
-        display_df[col] = display_df[col].map(
-            lambda x:
-            "-"
-            if pd.isna(x)
-            else (
-                "-"
-                if abs(x) < 0.00001
-                else (
-                    f"({abs(x):,.2f})"
-                    if x < 0
-                    else f"{x:,.2f}"
-                )
-            )
-        )
-
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        height=700
-    )
-
-    # =========================
-    # MONTHLY TOTALS
-    # =========================
-
-    monthly_totals = pd.DataFrame(
-        {
-            "Month": months,
-            "Volume (TBtu)":
-            [
-                data.loc[
-                    data["MONTH"] == m,
-                    "VOLUME"
-                ].sum() / 1_000_000
-                for m in months
-            ]
-        }
-    )
-
-    st.divider()
-
-    st.subheader("Monthly LNG Exposure")
-
-    fig = px.bar(
-        monthly_totals,
-        x="Month",
-        y="Volume (TBtu)",
-        text="Volume (TBtu)",
-        template="plotly_dark"
-    )
-
-    fig.update_traces(
-        marker_color="#00E676",
-        texttemplate="%{y:.1f}",
-        textposition="outside"
-    )
-
-    fig.update_layout(
-        height=500,
-        xaxis_title="",
-        yaxis_title="Volume (TBtu)",
-        paper_bgcolor="#0E1117",
-        plot_bgcolor="#0E1117"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    st.divider()
-
-    st.subheader("Monthly Long / Short Breakdown")
-
-    monthly_summary = []
-
-    for m in months:
-
-        month_data = data.loc[
-            data["MONTH"] == m
-            ].copy()
-
-        if len(month_data) == 0:
-            monthly_summary.append(
-                [
-                    m.strftime("%b-%y"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    0
-                ]
-            )
-
+        if pd.isna(contract):
             continue
 
-        cargo_month = (
-                month_data.groupby(
-                    "CARGO#/TRADEID"
-                )["VOLUME"]
-                .sum()
-                / 1_000_000
+        contract = str(contract).strip()
+
+        if contract == "":
+            continue
+
+        if clean_text(contract) == "CONTRACT":
+            continue
+
+        for cargo_ref in row.iloc[2:]:
+            if pd.isna(cargo_ref):
+                continue
+
+            cargo_ref = str(cargo_ref).strip()
+
+            if cargo_ref == "":
+                continue
+
+            mapping_rows.append(
+                {
+                    "CARGO_REFERENCE": cargo_ref,
+                    "REFERENCE_KEY": clean_text(cargo_ref),
+                    "CONTRACT_FROM_LIST": contract,
+                }
+            )
+
+    mapping = pd.DataFrame(mapping_rows)
+
+    if mapping.empty:
+        return mapping
+
+    mapping = (
+        mapping.drop_duplicates(
+            subset=["REFERENCE_KEY"],
+            keep="first",
+        )
+        .sort_values(
+            "REFERENCE_KEY",
+            key=lambda x: x.str.len(),
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )
+
+    return mapping
+
+
+def find_contract(cargo_reference, reference_mapping):
+    """
+    Match a TRADESNEW cargo reference to the contract list.
+
+    Exact matching is attempted first.
+
+    For PHYSICAL records, references may contain pricing-period
+    suffixes. For example:
+
+        YAMAL CY23-01-1
+        YAMAL CY23-01-2
+
+    These should match:
+
+        YAMAL CY23-01
+
+    References are therefore checked from longest to shortest.
+    """
+    reference_key = clean_text(cargo_reference)
+
+    if reference_key == "":
+        return None
+
+    if reference_mapping.empty:
+        return None
+
+    exact_match = reference_mapping.loc[
+        reference_mapping["REFERENCE_KEY"] == reference_key,
+        "CONTRACT_FROM_LIST",
+    ]
+
+    if not exact_match.empty:
+        return exact_match.iloc[0]
+
+    for row in reference_mapping.itertuples(index=False):
+        listed_reference = row.REFERENCE_KEY
+
+        if reference_key.startswith(listed_reference + "-"):
+            return row.CONTRACT_FROM_LIST
+
+        if reference_key.startswith(listed_reference + " "):
+            return row.CONTRACT_FROM_LIST
+
+    return None
+
+
+def classify_cargo_product(product):
+    """Classify cargo products into the four requested sections."""
+    product_key = clean_text(product)
+
+    if product_key == "NWE":
+        return "NWE"
+
+    if product_key == "MED":
+        return "MED"
+
+    if product_key == "INDIA":
+        return "India"
+
+    if product_key == "JKTC":
+        return "JKTC"
+
+    return "Unclassified"
+
+
+def classify_physical_product(product):
+    """Classify physical products into HH, Oil, EU Gas or JKM."""
+    product_key = clean_text(product)
+
+    # HH section
+    if product_key == "HH" or product_key.startswith("HH "):
+        return "HH"
+
+    # Oil section
+    oil_terms = [
+        "BFL",
+        "JCC",
+        "DATED BRENT",
+        "BRENT",
+        "DUBAI",
+    ]
+
+    if any(term in product_key for term in oil_terms):
+        return "Oil"
+
+    # EU Gas section
+    eu_gas_terms = [
+        "TTF",
+        "THE",
+        "PEG",
+        "NBP",
+        "ZTP",
+    ]
+
+    if any(term in product_key for term in eu_gas_terms):
+        return "EU Gas"
+
+    # JKM section
+    if "JKM" in product_key:
+        return "JKM"
+
+    return "Unclassified"
+
+
+def make_exposure_table(filtered_data, section_order):
+    """
+    Create rows for contract/product combinations with month columns,
+    followed by a subtotal for each section and a grand total.
+    """
+    months = pd.date_range(
+        start=f"{int(filtered_data['IFRS YEAR'].iloc[0])}-01-01",
+        end=f"{int(filtered_data['IFRS YEAR'].iloc[0])}-12-01",
+        freq="MS",
+    )
+
+    month_labels = [month.strftime("%b-%y") for month in months]
+
+    filtered_data = filtered_data.copy()
+    filtered_data["MONTH_LABEL"] = filtered_data[
+        "EXPOSURE DATE"
+    ].dt.strftime("%b-%y")
+
+    detail = pd.pivot_table(
+        filtered_data,
+        index=["SECTION", "MATCHED CONTRACT", "PRODUCT"],
+        columns="MONTH_LABEL",
+        values="VOLUME_TBTU",
+        aggfunc="sum",
+        fill_value=0,
+    )
+
+    detail = detail.reindex(
+        columns=month_labels,
+        fill_value=0,
+    ).reset_index()
+
+    output_rows = []
+
+    for section in section_order:
+        section_rows = detail.loc[
+            detail["SECTION"] == section
+        ].copy()
+
+        if section_rows.empty:
+            subtotal = {
+                "Section": section,
+                "Contract": f"{section} TOTAL",
+                "Product": "",
+                "Row Type": "Subtotal",
+            }
+
+            for month in month_labels:
+                subtotal[month] = 0.0
+
+            subtotal["Total"] = 0.0
+            output_rows.append(subtotal)
+            continue
+
+        section_rows = section_rows.sort_values(
+            ["MATCHED CONTRACT", "PRODUCT"]
         )
 
-        long_count = int(
-            (cargo_month > 0).sum()
+        for _, row in section_rows.iterrows():
+            output_row = {
+                "Section": section,
+                "Contract": row["MATCHED CONTRACT"],
+                "Product": row["PRODUCT"],
+                "Row Type": "Detail",
+            }
+
+            for month in month_labels:
+                output_row[month] = row[month]
+
+            output_row["Total"] = sum(
+                output_row[month]
+                for month in month_labels
+            )
+
+            output_rows.append(output_row)
+
+        subtotal = {
+            "Section": section,
+            "Contract": f"{section} TOTAL",
+            "Product": "",
+            "Row Type": "Subtotal",
+        }
+
+        for month in month_labels:
+            subtotal[month] = section_rows[month].sum()
+
+        subtotal["Total"] = sum(
+            subtotal[month]
+            for month in month_labels
         )
 
-        short_count = int(
-            (cargo_month < 0).sum()
-        )
+        output_rows.append(subtotal)
 
-        long_tbtu = (
-                month_data.loc[
-                    month_data["VOLUME"] > 0,
-                    "VOLUME"
-                ].sum()
-                / 1_000_000
-        )
+    grand_total = {
+        "Section": "",
+        "Contract": "GRAND TOTAL",
+        "Product": "",
+        "Row Type": "Grand Total",
+    }
 
-        short_tbtu = (
-                month_data.loc[
-                    month_data["VOLUME"] < 0,
-                    "VOLUME"
-                ].sum()
-                / 1_000_000
-        )
+    for month in month_labels:
+        grand_total[month] = filtered_data.loc[
+            filtered_data["MONTH_LABEL"] == month,
+            "VOLUME_TBTU",
+        ].sum()
 
-        net_tbtu = (
-                month_data["VOLUME"].sum()
-                / 1_000_000
-        )
+    grand_total["Total"] = filtered_data["VOLUME_TBTU"].sum()
+    output_rows.append(grand_total)
 
-        monthly_summary.append(
+    return pd.DataFrame(output_rows), month_labels
+
+
+def format_number(value):
+    """Use dashes for zero and brackets for negative values."""
+    if pd.isna(value) or abs(value) < 0.00001:
+        return "-"
+
+    if value < 0:
+        return f"({abs(value):,.2f})"
+
+    return f"{value:,.2f}"
+
+
+def highlight_rows(row):
+    """Apply formatting to subtotal and grand-total rows."""
+    if row["Row Type"] == "Grand Total":
+        return [
+            "background-color: #0f766e; color: white; font-weight: bold"
+        ] * len(row)
+
+    if row["Row Type"] == "Subtotal":
+        return [
+            "background-color: #1f2937; color: white; font-weight: bold"
+        ] * len(row)
+
+    return [""] * len(row)
+
+
+# ============================================================
+# READ WORKBOOK
+# ============================================================
+
+try:
+    trades, cargo_refs = read_workbook(uploaded_file)
+except Exception as error:
+    st.error(f"Failed to read workbook: {error}")
+    st.stop()
+
+trades.columns = [
+    str(column).strip()
+    for column in trades.columns
+]
+
+required_columns = [
+    "FIRM",
+    "TYPE",
+    "CONTRACT",
+    "CARGO#/TRADEID",
+    "PRODUCT",
+    "VOLUME",
+    "EXPOSURE DATE",
+    "IFRS YEAR",
+]
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column not in trades.columns
+]
+
+if missing_columns:
+    st.error(f"Missing TRADESNEW columns: {missing_columns}")
+    st.write("Columns found:")
+    st.write(trades.columns.tolist())
+    st.stop()
+
+
+# ============================================================
+# CLEAN DATA
+# ============================================================
+
+data = trades.copy()
+
+data["TYPE"] = data["TYPE"].map(clean_text)
+data["FIRM"] = data["FIRM"].map(clean_text)
+data["PRODUCT"] = data["PRODUCT"].astype(str).str.strip()
+data["CARGO#/TRADEID"] = (
+    data["CARGO#/TRADEID"]
+    .astype(str)
+    .str.strip()
+)
+data["TRADESNEW CONTRACT"] = (
+    data["CONTRACT"]
+    .astype(str)
+    .str.strip()
+)
+
+data["VOLUME"] = pd.to_numeric(
+    data["VOLUME"],
+    errors="coerce",
+)
+
+data["EXPOSURE DATE"] = pd.to_datetime(
+    data["EXPOSURE DATE"],
+    errors="coerce",
+)
+
+data["IFRS YEAR"] = pd.to_numeric(
+    data["IFRS YEAR"],
+    errors="coerce",
+)
+
+data = data.loc[
+    data["TYPE"].isin(["CARGO", "PHYSICAL"])
+    & data["VOLUME"].notna()
+    & data["EXPOSURE DATE"].notna()
+    & data["IFRS YEAR"].notna()
+    & data["CARGO#/TRADEID"].notna()
+].copy()
+
+data = data.loc[
+    data["CARGO#/TRADEID"].str.lower().ne("nan")
+    & data["CARGO#/TRADEID"].ne("")
+].copy()
+
+# Convert the workbook volumes to TBtu.
+data["VOLUME_TBTU"] = data["VOLUME"] / 1_000_000
+
+
+# ============================================================
+# REFERENCE TO CONTRACT MATCHING
+# ============================================================
+
+reference_mapping = build_reference_mapping(cargo_refs)
+
+if reference_mapping.empty:
+    st.error(
+        "No cargo references could be read from the "
+        "'All cargo refs' worksheet."
+    )
+    st.stop()
+
+with st.spinner("Matching cargo references to contracts..."):
+    data["MATCHED CONTRACT"] = data["CARGO#/TRADEID"].apply(
+        lambda value: find_contract(
+            value,
+            reference_mapping,
+        )
+    )
+
+
+# ============================================================
+# FILTER CONTROLS
+# ============================================================
+
+control1, control2, control3 = st.columns([1, 1, 2])
+
+with control1:
+    selected_type = st.radio(
+        "Exposure Type",
+        options=["CARGO", "PHYSICAL"],
+        horizontal=True,
+    )
+
+available_years = sorted(
+    data["IFRS YEAR"]
+    .dropna()
+    .astype(int)
+    .unique()
+)
+
+if not available_years:
+    st.warning("No IFRS years were found.")
+    st.stop()
+
+with control2:
+    selected_year = st.selectbox(
+        "IFRS Year",
+        options=available_years,
+        index=len(available_years) - 1,
+    )
+
+with control3:
+    contract_search = st.text_input(
+        "Search contract or cargo reference",
+        placeholder="Enter contract or cargo reference",
+    )
+
+
+# ============================================================
+# APPLY FILTERS AND CLASSIFICATION
+# ============================================================
+
+filtered = data.loc[
+    (data["TYPE"] == selected_type)
+    & (data["IFRS YEAR"] == selected_year)
+].copy()
+
+if selected_type == "CARGO":
+    filtered["SECTION"] = filtered["PRODUCT"].apply(
+        classify_cargo_product
+    )
+
+    section_order = [
+        "NWE",
+        "MED",
+        "India",
+        "JKTC",
+    ]
+
+else:
+    filtered["SECTION"] = filtered["PRODUCT"].apply(
+        classify_physical_product
+    )
+
+    section_order = [
+        "HH",
+        "Oil",
+        "EU Gas",
+        "JKM",
+    ]
+
+if contract_search:
+    search_key = clean_text(contract_search)
+
+    filtered = filtered.loc[
+        filtered["MATCHED CONTRACT"]
+        .fillna("")
+        .map(clean_text)
+        .str.contains(search_key, regex=False)
+        |
+        filtered["CARGO#/TRADEID"]
+        .fillna("")
+        .map(clean_text)
+        .str.contains(search_key, regex=False)
+    ].copy()
+
+
+# ============================================================
+# MATCHING CONTROLS
+# ============================================================
+
+unmatched_references = filtered.loc[
+    filtered["MATCHED CONTRACT"].isna(),
+    "CARGO#/TRADEID",
+].drop_duplicates()
+
+unclassified_products = filtered.loc[
+    filtered["SECTION"] == "Unclassified",
+    "PRODUCT",
+].drop_duplicates()
+
+matched = filtered.loc[
+    filtered["MATCHED CONTRACT"].notna()
+    & filtered["SECTION"].isin(section_order)
+].copy()
+
+if matched.empty:
+    st.warning(
+        "No matching exposures were found for the selected "
+        "type and IFRS year."
+    )
+
+    if not unmatched_references.empty:
+        with st.expander("Unmatched cargo references"):
+            st.dataframe(
+                unmatched_references.to_frame(
+                    name="Cargo Reference"
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.stop()
+
+
+# ============================================================
+# KPIs
+# ============================================================
+
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+kpi1.metric(
+    "Contracts",
+    f"{matched['MATCHED CONTRACT'].nunique():,}",
+)
+
+kpi2.metric(
+    "Cargo References",
+    f"{matched['CARGO#/TRADEID'].nunique():,}",
+)
+
+kpi3.metric(
+    "Products",
+    f"{matched['PRODUCT'].nunique():,}",
+)
+
+kpi4.metric(
+    "Total Exposure",
+    f"{matched['VOLUME_TBTU'].sum():,.2f} TBtu",
+)
+
+st.divider()
+
+
+# ============================================================
+# BUILD TABLE
+# ============================================================
+
+exposure_table, month_columns = make_exposure_table(
+    matched,
+    section_order,
+)
+
+st.subheader(
+    f"{selected_type.title()} Contract Exposure by Product"
+)
+
+display_table = exposure_table.copy()
+
+numeric_columns = month_columns + ["Total"]
+
+for column in numeric_columns:
+    display_table[column] = display_table[column].apply(
+        format_number
+    )
+
+styled_table = (
+    display_table.style
+    .apply(highlight_rows, axis=1)
+    .hide(axis="columns", subset=["Row Type"])
+)
+
+st.dataframe(
+    styled_table,
+    use_container_width=True,
+    height=750,
+    hide_index=True,
+)
+
+
+# ============================================================
+# SECTION TOTALS
+# ============================================================
+
+st.subheader("Section Totals")
+
+section_totals = (
+    matched.groupby("SECTION", as_index=False)["VOLUME_TBTU"]
+    .sum()
+    .rename(
+        columns={
+            "SECTION": "Section",
+            "VOLUME_TBTU": "Total Exposure (TBtu)",
+        }
+    )
+)
+
+section_totals["Section"] = pd.Categorical(
+    section_totals["Section"],
+    categories=section_order,
+    ordered=True,
+)
+
+section_totals = section_totals.sort_values("Section")
+
+st.dataframe(
+    section_totals.style.format(
+        {
+            "Total Exposure (TBtu)": lambda x: format_number(x)
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+
+
+# ============================================================
+# DATA QUALITY WARNINGS
+# ============================================================
+
+if not unmatched_references.empty:
+    st.warning(
+        f"{len(unmatched_references):,} cargo references could not "
+        "be matched to the 'All cargo refs' worksheet."
+    )
+
+    with st.expander("View unmatched cargo references"):
+        unmatched_detail = filtered.loc[
+            filtered["MATCHED CONTRACT"].isna(),
             [
-                m.strftime("%b-%y"),
-                long_count,
-                short_count,
-                round(long_tbtu, 3),
-                round(short_tbtu, 3),
-                round(net_tbtu, 3)
-            ]
+                "CARGO#/TRADEID",
+                "TRADESNEW CONTRACT",
+                "TYPE",
+                "PRODUCT",
+                "EXPOSURE DATE",
+                "VOLUME_TBTU",
+            ],
+        ].copy()
+
+        st.dataframe(
+            unmatched_detail,
+            use_container_width=True,
+            hide_index=True,
         )
 
-    monthly_summary = pd.DataFrame(
-        monthly_summary,
-        columns=[
-            "Month",
-            "Long Cargoes",
-            "Short Cargoes",
-            "Long TBtu",
-            "Short TBtu",
-            "Net TBtu"
-        ]
+if not unclassified_products.empty:
+    st.warning(
+        f"{len(unclassified_products):,} products could not be "
+        f"classified into the requested {selected_type} sections."
     )
 
-    st.dataframe(
-        monthly_summary,
-        use_container_width=True,
-        hide_index=True
+    with st.expander("View unclassified products"):
+        st.dataframe(
+            unclassified_products.to_frame(name="Product"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+# ============================================================
+# EXCEL DOWNLOAD
+# ============================================================
+
+output = BytesIO()
+
+export_table = exposure_table.drop(
+    columns=["Row Type"]
+).copy()
+
+with pd.ExcelWriter(
+    output,
+    engine="xlsxwriter",
+) as writer:
+    export_table.to_excel(
+        writer,
+        sheet_name=f"{selected_type.title()} Exposure",
+        index=False,
     )
 
-    # =========================
-    # DOWNLOAD
-    # =========================
+    section_totals.to_excel(
+        writer,
+        sheet_name="Section Totals",
+        index=False,
+    )
 
-    output = BytesIO()
+    unmatched_export = filtered.loc[
+        filtered["MATCHED CONTRACT"].isna()
+    ].copy()
 
-    export_df = pivot.copy()
-
-    with pd.ExcelWriter(
-        output,
-        engine="xlsxwriter"
-    ) as writer:
-
-        export_df.to_excel(
+    if not unmatched_export.empty:
+        unmatched_export.to_excel(
             writer,
-            sheet_name="Cargo Exposure"
+            sheet_name="Unmatched References",
+            index=False,
         )
 
-    st.download_button(
-        "📥 Download Excel",
-        output.getvalue(),
-        file_name=f"Cargo_Exposure_{int(selected_year)}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-    st.write(
-        "Cargo refs in filtered data",
-        data["CARGO#/TRADEID"].nunique()
-    )
-
-    display_data = data[
-        data["EXPOSURE DATE"] >= min_month
-        ]
-
-    st.write(
-        "Cargo refs after month filter",
-        display_data["CARGO#/TRADEID"].nunique()
-    )
+st.download_button(
+    label="📥 Download Exposure Table",
+    data=output.getvalue(),
+    file_name=(
+        f"{selected_type.title()}_Contract_Exposure_"
+        f"{int(selected_year)}.xlsx"
+    ),
+    mime=(
+        "application/vnd.openxmlformats-officedocument."
+        "spreadsheetml.sheet"
+    ),
+)
