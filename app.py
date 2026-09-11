@@ -488,12 +488,9 @@ def normalise_display_products(
 
 def format_number(value):
     """
-    Display zero as a dash and negatives in brackets.
+    Display zero as a dash and negative values in brackets.
     """
-    if pd.isna(value):
-        return "-"
-
-    if abs(value) < 0.00001:
+    if pd.isna(value) or abs(value) < 0.00001:
         return "-"
 
     if value < 0:
@@ -674,29 +671,98 @@ def build_exposure_table(
 # ============================================================
 
 def style_table(
+    numeric_df,
     display_df,
     subtotal_rows,
+    value_columns,
 ):
     """
-    Highlight subtotal rows.
+    Format the Streamlit table.
+
+    Features:
+      - Centre all headers and cells
+      - Display negative numbers in red
+      - Use bold dark subtotal rows
+      - Use a stronger, clearer header row
     """
-    def apply_row_style(row):
-        if row.name in subtotal_rows:
-            return [
-                (
+
+    def style_rows(row):
+        styles = []
+
+        for column in display_df.columns:
+            style = (
+                "text-align: center; "
+                "vertical-align: middle;"
+            )
+
+            if row.name in subtotal_rows:
+                style += (
                     "background-color: #1f2937; "
                     "color: white; "
                     "font-weight: bold; "
-                    "border-top: 1px solid #6b7280;"
+                    "border-top: 2px solid #64748b; "
+                    "border-bottom: 1px solid #64748b;"
                 )
-            ] * len(row)
 
-        return [""] * len(row)
+            elif (
+                column in value_columns
+                and pd.notna(
+                    numeric_df.loc[row.name, column]
+                )
+                and numeric_df.loc[row.name, column] < 0
+            ):
+                style += (
+                    "color: #dc2626; "
+                    "font-weight: 600;"
+                )
 
-    return display_df.style.apply(
-        apply_row_style,
+            styles.append(style)
+
+        return styles
+
+    styled = display_df.style.apply(
+        style_rows,
         axis=1,
     )
+
+    styled = styled.set_table_styles(
+        [
+            {
+                "selector": "thead th",
+                "props": [
+                    ("background-color", "#111827"),
+                    ("color", "#ffffff"),
+                    ("font-weight", "700"),
+                    ("text-align", "center"),
+                    ("vertical-align", "middle"),
+                    ("border-bottom", "2px solid #475569"),
+                    ("padding", "10px"),
+                ],
+            },
+            {
+                "selector": "tbody td",
+                "props": [
+                    ("text-align", "center"),
+                    ("vertical-align", "middle"),
+                    ("padding", "8px"),
+                ],
+            },
+            {
+                "selector": "th.row_heading",
+                "props": [
+                    ("display", "none"),
+                ],
+            },
+            {
+                "selector": "th.blank",
+                "props": [
+                    ("display", "none"),
+                ],
+            },
+        ]
+    )
+
+    return styled
 
 
 # ============================================================
@@ -1266,6 +1332,7 @@ st.subheader(
 # FORMAT AND DISPLAY TABLE
 # ============================================================
 
+numeric_table = exposure_table.copy()
 display_table = exposure_table.copy()
 
 for column in value_columns:
@@ -1275,8 +1342,10 @@ for column in value_columns:
     )
 
 styled_table = style_table(
-    display_table,
-    subtotal_rows,
+    numeric_df=numeric_table,
+    display_df=display_table,
+    subtotal_rows=subtotal_rows,
+    value_columns=value_columns,
 )
 
 st.dataframe(
