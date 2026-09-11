@@ -42,7 +42,7 @@ st.markdown(
 
 
 # ============================================================
-# HEADER AND UPLOAD
+# HEADER AND FILE UPLOAD
 # ============================================================
 
 st.title("LNG Contract Exposure Dashboard")
@@ -53,7 +53,9 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is None:
-    st.info("Upload the COB workbook to generate the exposure table.")
+    st.info(
+        "Upload the COB workbook to generate the exposure table."
+    )
     st.stop()
 
 
@@ -63,7 +65,7 @@ if uploaded_file is None:
 
 def clean_text_series(series):
     """
-    Standardise an entire pandas Series for matching.
+    Standardise a pandas Series for matching.
     """
     return (
         series.fillna("")
@@ -76,7 +78,7 @@ def clean_text_series(series):
 
 def clean_text(value):
     """
-    Standardise an individual text value for matching.
+    Standardise an individual value for matching.
     """
     if pd.isna(value):
         return ""
@@ -91,8 +93,8 @@ def read_workbook(file_bytes):
     """
     Read and cache only the required workbook data.
 
-    The workbook is not reopened every time a user changes
-    a dashboard control.
+    The workbook will not be reopened every time a dashboard
+    control is changed.
     """
     trades = pd.read_excel(
         BytesIO(file_bytes),
@@ -124,8 +126,8 @@ def read_workbook(file_bytes):
 @st.cache_data(show_spinner=False)
 def build_reference_mapping(cargo_refs):
     """
-    Convert the wide 'All cargo refs' sheet into a reference
-    dictionary.
+    Convert the wide 'All cargo refs' worksheet into a
+    cargo-reference-to-contract dictionary.
 
     Column B contains the contract.
     Columns C onward contain the cargo references.
@@ -156,7 +158,7 @@ def build_reference_mapping(cargo_refs):
             .str.strip()
         )
 
-        references = references[
+        references = references.loc[
             references.ne("")
         ]
 
@@ -191,7 +193,7 @@ def match_contracts(
     reference_dictionary,
 ):
     """
-    Match references using fast vectorised dictionary mapping.
+    Match references using vectorised dictionary mapping.
 
     Matching order:
       1. Exact cargo reference
@@ -236,7 +238,7 @@ def classify_products(
     exposure_type,
 ):
     """
-    Classify products into the required display sections.
+    Classify products into the correct table sections.
     """
     product_keys = clean_text_series(
         product_series
@@ -328,7 +330,7 @@ def classify_products(
 
 def format_number(value):
     """
-    Display zero as a dash and negatives in brackets.
+    Display zero as a dash and negative values in brackets.
     """
     if pd.isna(value):
         return "-"
@@ -348,15 +350,16 @@ def build_exposure_table(
     selected_year,
 ):
     """
-    Build the contract, product and month exposure matrix.
+    Build the contract, product and monthly exposure matrix.
 
     All Years:
-      Columns are displayed as Jan-26, Feb-26, and so on.
+      Columns are displayed as Jan-26, Feb-26 and so on.
 
     Individual Year:
-      Columns are displayed as Jan, Feb, and so on.
+      Columns are displayed as Jan, Feb and so on.
 
-    A subtotal is included at the bottom of every section.
+    A subtotal row is included at the bottom of every section.
+    There is no total column at the end of each row.
     """
     table_data = filtered_data.copy()
 
@@ -436,6 +439,10 @@ def build_exposure_table(
             detail["SECTION"] == section_name
         ].copy()
 
+        # Do not show completely empty sections.
+        if section_data.empty:
+            continue
+
         section_data = section_data.sort_values(
             by=[
                 "MATCHED CONTRACT",
@@ -453,7 +460,9 @@ def build_exposure_table(
             for month in month_labels:
                 output_row[month] = row[month]
 
-            output_rows.append(output_row)
+            output_rows.append(
+                output_row
+            )
 
         subtotal_row = {
             "Section": section_name,
@@ -464,8 +473,6 @@ def build_exposure_table(
         for month in month_labels:
             subtotal_row[month] = (
                 section_data[month].sum()
-                if month in section_data.columns
-                else 0
             )
 
         subtotal_row_indexes.append(
@@ -533,7 +540,7 @@ except Exception as error:
 
 
 # ============================================================
-# VALIDATE COLUMNS
+# VALIDATE REQUIRED COLUMNS
 # ============================================================
 
 trades.columns = [
@@ -678,7 +685,7 @@ with st.spinner(
 
 
 # ============================================================
-# DASHBOARD CONTROLS
+# MAIN DASHBOARD CONTROLS
 # ============================================================
 
 control1, control2, control3 = st.columns(
@@ -722,7 +729,7 @@ with control3:
 
 
 # ============================================================
-# FILTER BY TYPE AND YEAR
+# FILTER BY EXPOSURE TYPE AND YEAR
 # ============================================================
 
 filtered = data.loc[
@@ -746,6 +753,72 @@ filtered["SECTION"], section_order = (
         selected_type,
     )
 )
+
+
+# ============================================================
+# CONTRACT MULTISELECT FILTER
+# ============================================================
+
+available_contracts = sorted(
+    filtered["MATCHED CONTRACT"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
+if not available_contracts:
+    st.warning(
+        "No contracts could be matched for this selection."
+    )
+    st.stop()
+
+selected_contracts = st.multiselect(
+    "Contracts",
+    options=available_contracts,
+    default=available_contracts,
+    placeholder="Select contracts to display",
+    help=(
+        "All contracts are selected by default. "
+        "Remove a contract to switch it off, or add it back "
+        "to switch it on."
+    ),
+)
+
+button1, button2, button3 = st.columns(
+    [1, 1, 4]
+)
+
+with button1:
+    if st.button(
+        "Select all",
+        use_container_width=True,
+    ):
+        st.session_state["contract_selection"] = (
+            available_contracts
+        )
+        st.rerun()
+
+with button2:
+    if st.button(
+        "Clear all",
+        use_container_width=True,
+    ):
+        st.session_state["contract_selection"] = []
+        st.rerun()
+
+if not selected_contracts:
+    st.warning(
+        "No contracts are currently selected. "
+        "Select at least one contract to display the table."
+    )
+    st.stop()
+
+filtered = filtered.loc[
+    filtered["MATCHED CONTRACT"].isin(
+        selected_contracts
+    )
+].copy()
 
 
 # ============================================================
@@ -799,12 +872,32 @@ if search:
 # IDENTIFY MATCHED AND UNMATCHED RECORDS
 # ============================================================
 
-unmatched_data = filtered.loc[
-    filtered["MATCHED CONTRACT"].isna()
+# Unmatched data is calculated from the type/year selection
+# before applying the contract selection.
+quality_data = data.loc[
+    data["TYPE"] == selected_type
 ].copy()
 
-unclassified_data = filtered.loc[
-    filtered["SECTION"] == "Unclassified"
+if selected_year != "All Years":
+    quality_data = quality_data.loc[
+        quality_data["IFRS YEAR"]
+        == int(selected_year)
+    ].copy()
+
+quality_data["SECTION"], _ = (
+    classify_products(
+        quality_data["PRODUCT"],
+        selected_type,
+    )
+)
+
+unmatched_data = quality_data.loc[
+    quality_data["MATCHED CONTRACT"].isna()
+].copy()
+
+unclassified_data = quality_data.loc[
+    quality_data["MATCHED CONTRACT"].notna()
+    & quality_data["SECTION"].eq("Unclassified")
 ].copy()
 
 matched = filtered.loc[
@@ -817,29 +910,8 @@ matched = filtered.loc[
 if matched.empty:
     st.warning(
         "No matched exposure records were found "
-        "for this selection."
+        "for the selected filters."
     )
-
-    if not unmatched_data.empty:
-        with st.expander(
-            "View unmatched cargo references"
-        ):
-            st.dataframe(
-                unmatched_data[
-                    [
-                        "CARGO#/TRADEID",
-                        "TRADESNEW CONTRACT",
-                        "TYPE",
-                        "PRODUCT",
-                        "EXPOSURE DATE",
-                        "IFRS YEAR",
-                        "VOLUME_TBTU",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
     st.stop()
 
 
@@ -850,7 +922,7 @@ if matched.empty:
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
 kpi1.metric(
-    "Contracts",
+    "Selected Contracts",
     f"{matched['MATCHED CONTRACT'].nunique():,}",
 )
 
@@ -898,7 +970,7 @@ st.subheader(
 
 
 # ============================================================
-# FORMAT TABLE
+# FORMAT AND DISPLAY TABLE
 # ============================================================
 
 display_table = exposure_table.copy()
@@ -1015,7 +1087,9 @@ with pd.ExcelWriter(
 
     number_format = workbook.add_format(
         {
-            "num_format": '#,##0.00;#,##0.00;-',
+            "num_format": (
+                '#,##0.00;#,##0.00;-'
+            ),
         }
     )
 
@@ -1024,7 +1098,9 @@ with pd.ExcelWriter(
             "bold": True,
             "font_color": "white",
             "bg_color": "#1F2937",
-            "num_format": '#,##0.00;#,##0.00;-',
+            "num_format": (
+                '#,##0.00;#,##0.00;-'
+            ),
         }
     )
 
@@ -1058,6 +1134,7 @@ with pd.ExcelWriter(
 
     if month_columns:
         first_month_column = 3
+
         last_month_column = (
             first_month_column
             + len(month_columns)
