@@ -91,10 +91,10 @@ def clean_text(value):
 @st.cache_data(show_spinner=False)
 def read_workbook(file_bytes):
     """
-    Read and cache only the required workbook data.
+    Read only the required workbook data.
 
-    The workbook will not be reopened every time a dashboard
-    control is changed.
+    The result is cached so the workbook is not reopened
+    every time a dashboard control changes.
     """
     trades = pd.read_excel(
         BytesIO(file_bytes),
@@ -188,12 +188,100 @@ def build_reference_mapping(cargo_refs):
     )
 
 
+@st.cache_data(show_spinner=False)
+def prepare_data(trades, reference_dictionary):
+    """
+    Clean the data once and match cargo references to contracts.
+    """
+    data = trades.copy()
+
+    data.columns = [
+        str(column).strip()
+        for column in data.columns
+    ]
+
+    data["FIRM"] = clean_text_series(
+        data["FIRM"]
+    )
+
+    data["TYPE"] = clean_text_series(
+        data["TYPE"]
+    )
+
+    data["PRODUCT"] = (
+        data["PRODUCT"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    data["CARGO#/TRADEID"] = (
+        data["CARGO#/TRADEID"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    data["TRADESNEW CONTRACT"] = (
+        data["CONTRACT"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    data["VOLUME"] = pd.to_numeric(
+        data["VOLUME"],
+        errors="coerce",
+    )
+
+    data["EXPOSURE DATE"] = pd.to_datetime(
+        data["EXPOSURE DATE"],
+        errors="coerce",
+    )
+
+    data["IFRS YEAR"] = pd.to_numeric(
+        data["IFRS YEAR"],
+        errors="coerce",
+    )
+
+    data = data.loc[
+        data["TYPE"].isin(
+            [
+                "CARGO",
+                "PHYSICAL",
+                "FINANCIAL",
+            ]
+        )
+        & data["VOLUME"].notna()
+        & data["EXPOSURE DATE"].notna()
+        & data["IFRS YEAR"].notna()
+        & data["CARGO#/TRADEID"].ne("")
+    ].copy()
+
+    data["IFRS YEAR"] = (
+        data["IFRS YEAR"]
+        .astype(int)
+    )
+
+    # Convert volume to TBtu.
+    data["VOLUME_TBTU"] = (
+        data["VOLUME"] / 1_000_000
+    )
+
+    data["MATCHED CONTRACT"] = match_contracts(
+        data["CARGO#/TRADEID"],
+        reference_dictionary,
+    )
+
+    return data
+
+
 def match_contracts(
     reference_series,
     reference_dictionary,
 ):
     """
-    Match references using vectorised dictionary mapping.
+    Match cargo references using vectorised dictionary mapping.
 
     Matching order:
       1. Exact cargo reference
@@ -238,7 +326,7 @@ def classify_products(
     exposure_type,
 ):
     """
-    Classify products into the correct table sections.
+    Classify products into the relevant sections.
     """
     product_keys = clean_text_series(
         product_series
@@ -285,7 +373,7 @@ def classify_products(
             hh_mask
         ] = "HH"
 
-        # Oil products
+        # Oil
         oil_mask = product_keys.str.contains(
             r"BFL|JCC|DATED BRENT|BRENT|DUBAI",
             regex=True,
@@ -296,7 +384,7 @@ def classify_products(
             oil_mask
         ] = "Oil"
 
-        # European gas products
+        # European gas
         eu_gas_mask = product_keys.str.contains(
             r"TTF|THE|PEG|NBP|ZTP",
             regex=True,
@@ -307,7 +395,7 @@ def classify_products(
             eu_gas_mask
         ] = "EU Gas"
 
-        # JKM products
+        # JKM
         jkm_mask = product_keys.str.contains(
             "JKM",
             regex=False,
@@ -330,7 +418,7 @@ def classify_products(
 
 def format_number(value):
     """
-    Display zero as a dash and negative values in brackets.
+    Display zero as a dash and negative numbers in brackets.
     """
     if pd.isna(value):
         return "-"
@@ -353,13 +441,12 @@ def build_exposure_table(
     Build the contract, product and monthly exposure matrix.
 
     All Years:
-      Columns are displayed as Jan-26, Feb-26 and so on.
+      Columns are Jan-26, Feb-26 and so on.
 
-    Individual Year:
-      Columns are displayed as Jan, Feb and so on.
+    Individual year:
+      Columns are Jan, Feb and so on.
 
-    A subtotal row is included at the bottom of every section.
-    There is no total column at the end of each row.
+    Each populated section includes a subtotal row.
     """
     table_data = filtered_data.copy()
 
@@ -439,7 +526,7 @@ def build_exposure_table(
             detail["SECTION"] == section_name
         ].copy()
 
-        # Do not show completely empty sections.
+        # Do not display an empty section.
         if section_data.empty:
             continue
 
@@ -577,88 +664,11 @@ if missing_columns:
 
 
 # ============================================================
-# CLEAN DATA
-# ============================================================
-
-data = trades.copy()
-
-data["FIRM"] = clean_text_series(
-    data["FIRM"]
-)
-
-data["TYPE"] = clean_text_series(
-    data["TYPE"]
-)
-
-data["PRODUCT"] = (
-    data["PRODUCT"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
-)
-
-data["CARGO#/TRADEID"] = (
-    data["CARGO#/TRADEID"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
-)
-
-data["TRADESNEW CONTRACT"] = (
-    data["CONTRACT"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
-)
-
-data["VOLUME"] = pd.to_numeric(
-    data["VOLUME"],
-    errors="coerce",
-)
-
-data["EXPOSURE DATE"] = pd.to_datetime(
-    data["EXPOSURE DATE"],
-    errors="coerce",
-)
-
-data["IFRS YEAR"] = pd.to_numeric(
-    data["IFRS YEAR"],
-    errors="coerce",
-)
-
-data = data.loc[
-    data["TYPE"].isin(
-        [
-            "CARGO",
-            "PHYSICAL",
-            "FINANCIAL",
-        ]
-    )
-    & data["VOLUME"].notna()
-    & data["EXPOSURE DATE"].notna()
-    & data["IFRS YEAR"].notna()
-    & data["CARGO#/TRADEID"].ne("")
-].copy()
-
-data["IFRS YEAR"] = (
-    data["IFRS YEAR"]
-    .astype(int)
-)
-
-# Convert workbook volume to TBtu.
-data["VOLUME_TBTU"] = (
-    data["VOLUME"] / 1_000_000
-)
-
-
-# ============================================================
 # BUILD CONTRACT MAPPING
 # ============================================================
 
-reference_dictionary = (
-    build_reference_mapping(
-        cargo_refs
-    )
+reference_dictionary = build_reference_mapping(
+    cargo_refs
 )
 
 if not reference_dictionary:
@@ -670,22 +680,20 @@ if not reference_dictionary:
 
 
 # ============================================================
-# MATCH REFERENCES TO CONTRACTS
+# PREPARE DATA
 # ============================================================
 
 with st.spinner(
-    "Matching cargo references to contracts..."
+    "Cleaning data and matching cargo references..."
 ):
-    data["MATCHED CONTRACT"] = (
-        match_contracts(
-            data["CARGO#/TRADEID"],
-            reference_dictionary,
-        )
+    data = prepare_data(
+        trades,
+        reference_dictionary,
     )
 
 
 # ============================================================
-# MAIN DASHBOARD CONTROLS
+# MAIN CONTROLS
 # ============================================================
 
 control1, control2, control3 = st.columns(
@@ -707,6 +715,7 @@ available_years = sorted(
     data["IFRS YEAR"]
     .dropna()
     .unique()
+    .tolist()
 )
 
 year_options = (
@@ -732,35 +741,40 @@ with control3:
 # FILTER BY EXPOSURE TYPE AND YEAR
 # ============================================================
 
-filtered = data.loc[
+filtered_before_contracts = data.loc[
     data["TYPE"] == selected_type
 ].copy()
 
 if selected_year != "All Years":
-    filtered = filtered.loc[
-        filtered["IFRS YEAR"]
-        == int(selected_year)
-    ].copy()
+    filtered_before_contracts = (
+        filtered_before_contracts.loc[
+            filtered_before_contracts["IFRS YEAR"]
+            == int(selected_year)
+        ].copy()
+    )
 
 
 # ============================================================
 # CLASSIFY PRODUCTS
 # ============================================================
 
-filtered["SECTION"], section_order = (
-    classify_products(
-        filtered["PRODUCT"],
-        selected_type,
-    )
+(
+    filtered_before_contracts["SECTION"],
+    section_order,
+) = classify_products(
+    filtered_before_contracts["PRODUCT"],
+    selected_type,
 )
 
 
 # ============================================================
-# CONTRACT MULTISELECT FILTER
+# CONTRACT MULTISELECT
 # ============================================================
 
 available_contracts = sorted(
-    filtered["MATCHED CONTRACT"]
+    filtered_before_contracts[
+        "MATCHED CONTRACT"
+    ]
     .dropna()
     .astype(str)
     .unique()
@@ -771,19 +785,71 @@ if not available_contracts:
     st.warning(
         "No contracts could be matched for this selection."
     )
+
+    unmatched_selection = (
+        filtered_before_contracts.loc[
+            filtered_before_contracts[
+                "MATCHED CONTRACT"
+            ].isna()
+        ]
+    )
+
+    if not unmatched_selection.empty:
+        with st.expander(
+            "View unmatched cargo references"
+        ):
+            st.dataframe(
+                unmatched_selection[
+                    [
+                        "CARGO#/TRADEID",
+                        "TRADESNEW CONTRACT",
+                        "TYPE",
+                        "PRODUCT",
+                        "EXPOSURE DATE",
+                        "IFRS YEAR",
+                        "VOLUME_TBTU",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
     st.stop()
 
-selected_contracts = st.multiselect(
-    "Contracts",
-    options=available_contracts,
-    default=available_contracts,
-    placeholder="Select contracts to display",
-    help=(
-        "All contracts are selected by default. "
-        "Remove a contract to switch it off, or add it back "
-        "to switch it on."
-    ),
+
+# Create a context value so selections reset when type/year changes.
+contract_context = (
+    f"{selected_type}_{selected_year}_"
+    f"{uploaded_file.name}"
 )
+
+if (
+    "last_contract_context"
+    not in st.session_state
+    or st.session_state["last_contract_context"]
+    != contract_context
+):
+    st.session_state["contract_selection"] = (
+        available_contracts.copy()
+    )
+
+    st.session_state["last_contract_context"] = (
+        contract_context
+    )
+
+
+# Remove any contracts that are no longer available.
+st.session_state["contract_selection"] = [
+    contract
+    for contract in st.session_state.get(
+        "contract_selection",
+        [],
+    )
+    if contract in available_contracts
+]
+
+
+st.subheader("Contract Selection")
 
 button1, button2, button3 = st.columns(
     [1, 1, 4]
@@ -795,8 +861,9 @@ with button1:
         use_container_width=True,
     ):
         st.session_state["contract_selection"] = (
-            available_contracts
+            available_contracts.copy()
         )
+
         st.rerun()
 
 with button2:
@@ -805,19 +872,40 @@ with button2:
         use_container_width=True,
     ):
         st.session_state["contract_selection"] = []
+
         st.rerun()
+
+
+selected_contracts = st.multiselect(
+    "Contracts",
+    options=available_contracts,
+    key="contract_selection",
+    placeholder="Select contracts to display",
+    help=(
+        "All contracts are selected by default. "
+        "Remove a contract to switch it off. "
+        "Add it back to switch it on."
+    ),
+)
+
 
 if not selected_contracts:
     st.warning(
         "No contracts are currently selected. "
         "Select at least one contract to display the table."
     )
+
     st.stop()
 
-filtered = filtered.loc[
-    filtered["MATCHED CONTRACT"].isin(
-        selected_contracts
-    )
+
+# ============================================================
+# APPLY CONTRACT FILTER
+# ============================================================
+
+filtered = filtered_before_contracts.loc[
+    filtered_before_contracts[
+        "MATCHED CONTRACT"
+    ].isin(selected_contracts)
 ].copy()
 
 
@@ -869,36 +957,27 @@ if search:
 
 
 # ============================================================
-# IDENTIFY MATCHED AND UNMATCHED RECORDS
+# DATA QUALITY
 # ============================================================
 
-# Unmatched data is calculated from the type/year selection
-# before applying the contract selection.
-quality_data = data.loc[
-    data["TYPE"] == selected_type
-].copy()
-
-if selected_year != "All Years":
-    quality_data = quality_data.loc[
-        quality_data["IFRS YEAR"]
-        == int(selected_year)
+unmatched_data = (
+    filtered_before_contracts.loc[
+        filtered_before_contracts[
+            "MATCHED CONTRACT"
+        ].isna()
     ].copy()
-
-quality_data["SECTION"], _ = (
-    classify_products(
-        quality_data["PRODUCT"],
-        selected_type,
-    )
 )
 
-unmatched_data = quality_data.loc[
-    quality_data["MATCHED CONTRACT"].isna()
-].copy()
-
-unclassified_data = quality_data.loc[
-    quality_data["MATCHED CONTRACT"].notna()
-    & quality_data["SECTION"].eq("Unclassified")
-].copy()
+unclassified_data = (
+    filtered_before_contracts.loc[
+        filtered_before_contracts[
+            "MATCHED CONTRACT"
+        ].notna()
+        & filtered_before_contracts[
+            "SECTION"
+        ].eq("Unclassified")
+    ].copy()
+)
 
 matched = filtered.loc[
     filtered["MATCHED CONTRACT"].notna()
@@ -912,6 +991,7 @@ if matched.empty:
         "No matched exposure records were found "
         "for the selected filters."
     )
+
     st.stop()
 
 
@@ -1028,6 +1108,7 @@ if not unmatched_data.empty:
             hide_index=True,
         )
 
+
 if not unclassified_data.empty:
     unclassified_count = (
         unclassified_data["PRODUCT"]
@@ -1049,6 +1130,7 @@ if not unclassified_data.empty:
                     "CARGO#/TRADEID",
                     "MATCHED CONTRACT",
                     "IFRS YEAR",
+                    "EXPOSURE DATE",
                     "VOLUME_TBTU",
                 ]
             ],
@@ -1093,7 +1175,15 @@ with pd.ExcelWriter(
         }
     )
 
-    subtotal_format = workbook.add_format(
+    subtotal_text_format = workbook.add_format(
+        {
+            "bold": True,
+            "font_color": "white",
+            "bg_color": "#1F2937",
+        }
+    )
+
+    subtotal_number_format = workbook.add_format(
         {
             "bold": True,
             "font_color": "white",
@@ -1151,11 +1241,29 @@ with pd.ExcelWriter(
     for subtotal_index in subtotal_rows:
         excel_row = subtotal_index + 1
 
-        worksheet.set_row(
-            excel_row,
-            None,
-            subtotal_format,
-        )
+        for column_number in range(
+            len(exposure_table.columns)
+        ):
+            value = exposure_table.iloc[
+                subtotal_index,
+                column_number,
+            ]
+
+            if column_number < 3:
+                worksheet.write(
+                    excel_row,
+                    column_number,
+                    value,
+                    subtotal_text_format,
+                )
+
+            else:
+                worksheet.write_number(
+                    excel_row,
+                    column_number,
+                    float(value),
+                    subtotal_number_format,
+                )
 
     worksheet.freeze_panes(
         1,
@@ -1198,6 +1306,11 @@ with pd.ExcelWriter(
             sheet_name="Unclassified Products",
             index=False,
         )
+
+
+# ============================================================
+# DOWNLOAD BUTTON
+# ============================================================
 
 download_year = (
     "All_Years"
