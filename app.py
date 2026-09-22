@@ -272,46 +272,53 @@ def build_exposure_table(
     section_order,
     selected_year,
 ):
+    """
+    All Years view:
+        Columns are IFRS years.
+
+    Individual IFRS year view:
+        Rows are filtered by IFRS YEAR, but columns are the actual
+        month and year from EXPOSURE DATE. This means IFRS 2027 can
+        show columns such as Dec-26, Jan-27, and Jan-28 when those
+        exposure dates exist in the selected IFRS year.
+    """
     table_data = filtered_data.copy()
 
     if selected_year == "All Years":
         source_columns = sorted(
-            table_data["DASHBOARD YEAR"]
+            table_data["IFRS YEAR"]
             .dropna()
             .astype(int)
             .unique()
             .tolist()
         )
-        column_field = "DASHBOARD YEAR"
+        column_field = "IFRS YEAR"
         display_column_map = {
             year: str(year) for year in source_columns
         }
     else:
         selected_year_number = int(selected_year)
         table_data = table_data.loc[
-            table_data["DASHBOARD YEAR"] == selected_year_number
+            table_data["IFRS YEAR"] == selected_year_number
         ].copy()
 
-        # The month always comes from EXPOSURE DATE.
-        table_data["MONTH NUMBER"] = table_data["EXPOSURE DATE"].dt.month
-        source_columns = list(range(1, 13))
-        column_field = "MONTH NUMBER"
-        month_names = {
-            1: "Jan",
-            2: "Feb",
-            3: "Mar",
-            4: "Apr",
-            5: "May",
-            6: "Jun",
-            7: "Jul",
-            8: "Aug",
-            9: "Sep",
-            10: "Oct",
-            11: "Nov",
-            12: "Dec",
-        }
+        # Keep the complete exposure month and year, not just month number.
+        table_data["EXPOSURE MONTH"] = (
+            table_data["EXPOSURE DATE"].dt.to_period("M").dt.to_timestamp()
+        )
+
+        # Only display actual exposure months found for the selected IFRS year.
+        # The columns are sorted chronologically and may fall outside that year.
+        source_columns = sorted(
+            table_data["EXPOSURE MONTH"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+        column_field = "EXPOSURE MONTH"
         display_column_map = {
-            number: month_names[number] for number in source_columns
+            month: pd.Timestamp(month).strftime("%b-%y")
+            for month in source_columns
         }
 
     detail = pd.pivot_table(
@@ -322,7 +329,6 @@ def build_exposure_table(
         aggfunc="sum",
         fill_value=0,
     )
-
     detail = detail.reindex(
         columns=source_columns,
         fill_value=0,
@@ -335,7 +341,6 @@ def build_exposure_table(
         section_data = detail.loc[
             detail["SECTION"] == section_name
         ].copy()
-
         if section_data.empty:
             continue
 
@@ -349,10 +354,8 @@ def build_exposure_table(
                 "Contract": row["MATCHED CONTRACT"],
                 "Product": row["DISPLAY PRODUCT"],
             }
-
             for source_column in source_columns:
                 output_row[display_column_map[source_column]] = row[source_column]
-
             output_rows.append(output_row)
 
         subtotal_row = {
@@ -360,12 +363,10 @@ def build_exposure_table(
             "Contract": f"{section_name} TOTAL",
             "Product": "",
         }
-
         for source_column in source_columns:
             subtotal_row[display_column_map[source_column]] = (
                 section_data[source_column].sum()
             )
-
         subtotal_row_indexes.append(len(output_rows))
         output_rows.append(subtotal_row)
 
@@ -373,10 +374,7 @@ def build_exposure_table(
     value_columns = [
         display_column_map[column] for column in source_columns
     ]
-
     return output, value_columns, subtotal_row_indexes
-
-
 # ============================================================
 # TABLE STYLING
 # ============================================================
@@ -490,8 +488,7 @@ with st.spinner("Cleaning and matching cargo references..."):
 # ============================================================
 # MAIN CONTROLS
 # ============================================================
-control1, control2, control3 = st.columns([1.2, 1, 1.8])
-
+control1, control2 = st.columns([1.2, 1])
 with control1:
     selected_type = st.radio(
         "Exposure Type",
@@ -499,35 +496,22 @@ with control1:
         horizontal=True,
     )
 
-with control3:
-    year_basis = st.radio(
-        "Exposure year basis",
-        options=["IFRS Year", "Exposure Date Year"],
-        horizontal=True,
-        help=(
-            "IFRS Year uses the IFRS YEAR column. Exposure Date Year "
-            "uses the calendar year from EXPOSURE DATE. The month always "
-            "comes from EXPOSURE DATE."
-        ),
-    )
-
-if year_basis == "Exposure Date Year":
-    data["DASHBOARD YEAR"] = data["EXPOSURE DATE YEAR"]
-else:
-    data["DASHBOARD YEAR"] = data["IFRS YEAR"]
-
-data["DASHBOARD YEAR"] = data["DASHBOARD YEAR"].astype(int)
-
+# The dashboard is always controlled by IFRS YEAR.
 available_years = sorted(
-    data["DASHBOARD YEAR"].dropna().astype(int).unique().tolist()
+    data["IFRS YEAR"].dropna().astype(int).unique().tolist()
 )
 year_options = ["All Years"] + available_years
 
 with control2:
     selected_year = st.selectbox(
-        "Year View",
+        "IFRS Year View",
         options=year_options,
         index=0,
+        help=(
+            "Select an IFRS year. When you drill into a year, the columns "
+            "show every actual EXPOSURE DATE month found in that IFRS year, "
+            "including months in adjacent calendar years."
+        ),
     )
 
 search = st.text_input(
@@ -547,8 +531,9 @@ if not year_mismatches.empty:
     st.warning(
         f"{mismatch_rows:,} exposure rows across "
         f"{mismatch_references:,} unique references have an EXPOSURE DATE "
-        "year that differs from IFRS YEAR. Use 'Exposure year basis' above "
-        "to choose which year controls allocation."
+        "year that differs from IFRS YEAR. The exposure remains allocated "
+        "to its IFRS YEAR, while the drill-down column shows the actual "
+        "EXPOSURE DATE month and year."
     )
 
     with st.expander("View exposure year mismatches"):
@@ -573,7 +558,7 @@ if not year_mismatches.empty:
         )
 
 # ============================================================
-# FILTER BY TYPE AND DASHBOARD YEAR
+# FILTER BY TYPE AND IFRS YEAR
 # ============================================================
 filtered_before_contracts = data.loc[
     data["TYPE"] == selected_type
@@ -581,7 +566,7 @@ filtered_before_contracts = data.loc[
 
 if selected_year != "All Years":
     filtered_before_contracts = filtered_before_contracts.loc[
-        filtered_before_contracts["DASHBOARD YEAR"] == int(selected_year)
+        filtered_before_contracts["IFRS YEAR"] == int(selected_year)
     ].copy()
 
 # ============================================================
@@ -629,7 +614,6 @@ if not available_contracts:
                         "EXPOSURE DATE",
                         "EXPOSURE DATE YEAR",
                         "IFRS YEAR",
-                        "DASHBOARD YEAR",
                         "VOLUME_TBTU",
                     ]
                 ],
@@ -639,7 +623,7 @@ if not available_contracts:
     st.stop()
 
 contract_context = (
-    f"{selected_type}_{selected_year}_{year_basis}_"
+    f"{selected_type}_{selected_year}_IFRS_"
     f"{uploaded_file.name}_{len(file_bytes)}"
 )
 
@@ -797,10 +781,9 @@ if matched.empty:
 )
 
 view_name = "All Years" if selected_year == "All Years" else str(selected_year)
-basis_label = "IFRS Year" if year_basis == "IFRS Year" else "Exposure Date Year"
 
 st.subheader(
-    f"{selected_type.title()} Exposure: {view_name} ({basis_label} basis)"
+    f"{selected_type.title()} Exposure: {view_name} (IFRS Year basis)"
 )
 
 numeric_table = exposure_table.copy()
@@ -844,7 +827,6 @@ if not unmatched_data.empty:
                     "EXPOSURE DATE",
                     "EXPOSURE DATE YEAR",
                     "IFRS YEAR",
-                    "DASHBOARD YEAR",
                     "VOLUME_TBTU",
                 ]
             ],
@@ -869,7 +851,6 @@ if not unclassified_data.empty:
                     "IFRS YEAR",
                     "EXPOSURE DATE",
                     "EXPOSURE DATE YEAR",
-                    "DASHBOARD YEAR",
                     "VOLUME_TBTU",
                 ]
             ],
@@ -989,7 +970,6 @@ with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                 "EXPOSURE DATE",
                 "EXPOSURE DATE YEAR",
                 "IFRS YEAR",
-                "DASHBOARD YEAR",
                 "VOLUME_TBTU",
             ]
         ].copy()
@@ -1008,7 +988,6 @@ with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                 "IFRS YEAR",
                 "EXPOSURE DATE",
                 "EXPOSURE DATE YEAR",
-                "DASHBOARD YEAR",
                 "VOLUME_TBTU",
             ]
         ].copy()
@@ -1024,16 +1003,13 @@ with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
 download_year = (
     "All_Years" if selected_year == "All Years" else str(selected_year)
 )
-download_basis = (
-    "IFRS_Year" if year_basis == "IFRS Year" else "Exposure_Date_Year"
-)
 
 st.download_button(
     label="Download Exposure Table",
     data=output.getvalue(),
     file_name=(
         f"{selected_type.title()}_Contract_Exposure_"
-        f"{download_year}_{download_basis}.xlsx"
+        f"{download_year}_IFRS_Year.xlsx"
     ),
     mime=(
         "application/vnd.openxmlformats-officedocument."
